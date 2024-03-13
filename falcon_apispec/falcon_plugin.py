@@ -1,6 +1,8 @@
 import copy
 import re
+
 from apispec import BasePlugin, yaml_utils
+from apispec.core import VALID_METHODS
 from apispec.exceptions import APISpecError
 
 
@@ -11,22 +13,27 @@ class FalconPlugin(BasePlugin):
         super(FalconPlugin, self).__init__()
         self._app = app
 
-    @staticmethod
-    def _generate_resource_uri_mapping(app):
+    def init_spec(self, spec):
+        self._spec = spec
+
+    def _get_valid_methods(self):
+        return set(VALID_METHODS[self._spec.openapi_version.major])
+
+    def _generate_resource_uri_mapping(self, app):
         routes_to_check = copy.copy(app._router._roots)
+        valid_methods = self._get_valid_methods()
 
         mapping = {}
         for route in routes_to_check:
             uri = route.uri_template
             resource = route.resource
-            mapping[resource] = {
-                "uri": uri,
-                "methods": {}
-            }
+            mapping[resource] = {"uri": uri, "methods": {}}
 
             if route.method_map:
                 for method_name, method_handler in route.method_map.items():
-                    if method_handler.__dict__.get("__module__") == "falcon.responders":
+                    if method_handler.__module__ == "falcon.responders":
+                        continue
+                    if method_name.lower() not in valid_methods:
                         continue
                     mapping[resource]["methods"][method_name.lower()] = method_handler
 
@@ -38,15 +45,19 @@ class FalconPlugin(BasePlugin):
         resource_uri_mapping = self._generate_resource_uri_mapping(self._app)
 
         if resource not in resource_uri_mapping:
-            raise APISpecError("Could not find endpoint for resource {0}".format(resource))
+            raise APISpecError(
+                "Could not find endpoint for resource {0}".format(resource)
+            )
 
-        operations.update(yaml_utils.load_operations_from_docstring(resource.__doc__) or {})
+        operations.update(
+            yaml_utils.load_operations_from_docstring(resource.__doc__) or {}
+        )
         path = resource_uri_mapping[resource]["uri"]
 
         if base_path is not None:
             # make sure base_path accept either with or without leading slash
             # swagger 2 usually come with leading slash but not in openapi 3.x.x
-            base_path = '/' + base_path.strip('/')
+            base_path = "/" + base_path.strip("/")
             path = re.sub(base_path, "", path, 1)
 
         methods = resource_uri_mapping[resource]["methods"]
